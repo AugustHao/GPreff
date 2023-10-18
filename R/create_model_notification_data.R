@@ -106,7 +106,8 @@ create_model_notification_data <- function(
         prob,
         observed_data_array,
         size_forecast,
-        prob_forecast
+        prob_forecast,
+        timevarying_proportion
     )
     # infection_model_objects[[length(infection_model_objects) + 1]] <- module(size)
     # infection_model_objects
