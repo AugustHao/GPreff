@@ -5,10 +5,10 @@ fit_model <- function (model,
                        init_n_samples = 1000,
                        iterations_per_step = 1000) {
 
-    # # get stable inits
-    # init <- generate_valid_inits(model = model,
-    #                              chains = n_chains,
-    #                              max_tries = 1000)
+    # get stable inits
+    init <- generate_valid_inits(model = model,
+                                 chains = n_chains,
+                                 max_tries = 1000)
 
     # first pass at model fitting
     draws <- mcmc(
@@ -17,7 +17,7 @@ fit_model <- function (model,
         chains = n_chains,
         warmup = warmup,
         n_samples = init_n_samples,
-        #initial_values = init,
+        initial_values = init,
         one_by_one = TRUE
     )
 

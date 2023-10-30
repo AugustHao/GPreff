@@ -117,6 +117,7 @@ PCR_notification_model_objects <- create_model_notification_data(
     observable_infection_dates = PCR_infection_days,
     timevarying_delay_dist = PCR_notification_delay_distribution,
     timevarying_proportion = timevarying_CAR_PCR,
+    dow_option = "proportional",
     observed_data = PCR_matrix,
     case_type_proportion = PCR_prop_matrix,
     valid_mat = PCR_valid_mat,
@@ -128,6 +129,7 @@ RAT_notification_model_objects <- create_model_notification_data(
     observable_infection_dates = RAT_infection_days,
     timevarying_delay_dist = RAT_notification_delay_distribution,
     timevarying_proportion = timevarying_CAR_RAT,
+    dow_option = "proportional",
     observed_data = RAT_matrix,
     case_type_proportion = RAT_prop_matrix,
     valid_mat = RAT_valid_mat,
@@ -158,7 +160,7 @@ m <- model(combined_model_objects$infections_timeseries,
 plot(m)
 
 fit <- fit_model(model = m,
-                 n_chains = 4,
+                 n_chains = 2,
                  max_convergence_tries = 1,
                  warmup = 1000,
                  init_n_samples = 1000,
@@ -243,3 +245,12 @@ calculate(combined_model_objects$gp_lengthscale,
 calculate(combined_model_objects$gp_variance,
           values = fit,
           nsim = 10)
+
+pcr_weight <- calculate(combined_model_objects$pcr_dow_weight[[1]],
+          values = fit,
+          nsim = 1)[[1]]
+rowSums(pcr_weight[1,,])
+
+calculate(combined_model_objects$rat_dow_weight,
+          values = fit,
+          nsim = 1)

@@ -4,6 +4,7 @@ create_model_notification_data <- function(
         observable_infection_dates,
         timevarying_delay_dist_ext,
         timevarying_proportion,
+        dow_option = c("none","constant","proportional"),
         observed_data,
         model_likelihood = 'negative_binomial',
         valid_mat = 1,
@@ -29,33 +30,101 @@ create_model_notification_data <- function(
     case_type_proportion <- pmax(case_type_proportion,1e-3)
     timevarying_proportion[obs_data_idx,] <- timevarying_proportion[obs_data_idx,] * case_type_proportion
 
-    # get day of week index
-    # favour base approach over lubridate for manual declaration of factor level
-    # so that we know which index is which day of the week
-    dweek <- weekdays(observable_infection_dates)
-    dweek <- as.integer(
-        factor(
-        dweek,
-        levels = c("Monday",
-                   "Tuesday",
-                   "Wednesday",
-                   "Thursday",
-                   "Friday",
-                   "Saturday",
-                   "Sunday")
+    # implement dow correction if specified
+    dow_option <- match.arg(dow_option)
+
+    if (dow_option != "none") {
+        # get day of week index
+        # favour base approach over lubridate for manual declaration of factor level
+        # so that we know which index is which day of the week
+        dweek <- weekdays(observable_infection_dates)
+        dweek <- as.integer(
+            factor(
+                dweek,
+                levels = c("Monday",
+                           "Tuesday",
+                           "Wednesday",
+                           "Thursday",
+                           "Friday",
+                           "Saturday",
+                           "Sunday")
+            )
         )
-    )
 
-    # prior for dweek correction
-    dow_alpha <- greta::normal(1, 1, truncation = c(0, Inf), dim = c(1, 7))
-    dow_dist <- greta::dirichlet(dow_alpha, n_realisations = n_jurisdictions)
-    # normalise multiplier to average to 1
-    dow_weights <- dow_dist * 7
-    # match weight to date by state matrix
-    dow_correction <- t(dow_weights[,dweek])
+        # prior for dweek correction
 
-    # update proportion arg with dweek correction
-    timevarying_proportion_dow <- timevarying_proportion * dow_correction
+        # national mean
+        dow_nat <- greta::normal(0, 1,
+                                 dim = c(6,1))
+        # state specific
+        dow_state <- greta::normal(0, 1,
+                                   dim = c(n_jurisdictions,6))
+        # add together for mixed effect
+        dow <- sweep(dow_state, 2, dow_nat, FUN = "+")
+
+        # if assuming constant dow effect
+        if (dow_option == "constant") {
+            # inverse multilogit to get dow weights that sum to 1
+            dow_weight <- greta::imultilogit(dow)
+
+            # normalise multiplier to average to 1 over a week
+            dow_weight <- dow_weight * 7
+
+            # match weight to date by state matrix
+            dow_correction <- t(dow_weight)[dweek,]
+
+            # if assuming dow is proportional to infection count
+        } else if (dow_option == "proportional") {
+
+            # get unique week index
+            week_indx <- lubridate::week(observable_infection_dates) |>
+                as.factor() |>
+                as.integer()
+            week_unqiue <- unique(week_indx)
+            n_week_unqiue <- length(week_unqiue)
+
+            # calculate weekly mean infection
+            week_mean <- greta::zeros(length(week_unqiue),n_jurisdictions)
+            # Error in match.arg(FUN) : 'arg' must be NULL or a character vector
+            # prevents using apply, need to look into this further but for now use for
+            # loops
+            for (s in 1:n_jurisdictions) {
+
+                week_mean[,s] <-  week_mean[,s] + greta::tapply(infection_observable[,s],
+                                                                week_indx,
+                                                                FUN = "mean")
+            }
+            # multiply weekly dow with mean infection counts of that week
+            dow_by_week <- lapply(week_unqiue,FUN = function(x) {
+                sweep(dow,1,t(week_mean[x,]), FUN = "*")
+            })
+            # inverse multilogit to get dow weights that sum to 1
+            dow_weight <- lapply(dow_by_week,FUN = function(x) greta::imultilogit(x))
+
+            # normalise multiplier to average to 1 over a week
+            dow_weight <- lapply(dow_weight,FUN = function(x) {x * 7})
+
+            # match weight to date by state matrix
+
+            #first get dweek to be the same structure
+            dweek_list <- tapply(dweek,week_indx,FUN = unique)
+
+            #use it to re arrange dow weight
+            dow_correction <- greta::zeros(dim = c(1,8))
+            for (w in week_unqiue) {
+
+                weekly_dow_correction <-  t(dow_weight[[w]])[dweek_list[[w]],]
+
+                dow_correction <- rbind(dow_correction,
+                                        weekly_dow_correction)
+            }
+
+            dow_correction <- dow_correction[-1,]
+        }
+        #in both options we get a dow_correction to multiply proportion with
+        timevarying_proportion <- timevarying_proportion * dow_correction
+    }
+
 
     # build convolution matrix
     n_days_infection_observable <- length(observable_infection_idx)
@@ -71,7 +140,7 @@ create_model_notification_data <- function(
         cbind,
         lapply(1:n_jurisdictions, function(x) {
             convolution_matrices[[x]] %*% infection_observable[, x] *
-                timevarying_proportion_dow[, x]
+                timevarying_proportion[, x]
         }))
 
     # define likelihood
@@ -114,19 +183,34 @@ create_model_notification_data <- function(
             prob_obs[valid_idx])
     }
 
-    greta_arrays <- list(
-        dow_weights,
-        size,
-        prob,
-        observed_data_array
-    )
+    if (dow_option != "none") {
+        greta_arrays <- list(
+            dow_weight,
+            size,
+            prob,
+            observed_data_array
+        )
 
-    names(greta_arrays) <- c(
-        paste0(dataID, '_dow_weights'),
-        paste0(dataID, '_size'),
-        paste0(dataID, '_prob'),
-        paste0(dataID, '_observed_data_array')
-    )
+        names(greta_arrays) <- c(
+            paste0(dataID, '_dow_weight'),
+            paste0(dataID, '_size'),
+            paste0(dataID, '_prob'),
+            paste0(dataID, '_observed_data_array')
+        )
+    } else {
+        greta_arrays <- list(
+            size,
+            prob,
+            observed_data_array
+        )
+
+        names(greta_arrays) <- c(
+            paste0(dataID, '_size'),
+            paste0(dataID, '_prob'),
+            paste0(dataID, '_observed_data_array')
+        )
+    }
+
 
     return(greta_arrays)
 }
